@@ -1,0 +1,39 @@
+name: Sync upstream master
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 00:00
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/master
+          fetch-depth: 0
+
+      - name: Setup git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/JingMatrix/ChromeXt.git
+          git fetch upstream
+
+      - name: Merge upstream/master
+        run: |
+          git checkout master
+          # 这里示例做普通合并；若想用 rebase 或 squash，根据需要改命令
+          git merge --no-edit upstream/master || (echo "merge failed"; exit 1)
+
+      - name: Push changes
+        env:
+          # 如果是私有仓库，需要使用 PAT with repo permissions, 存在为 secret: PERSOAL_TOKEN
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 若没有权限用 GITHUB_TOKEN 推送到受保护分支，需要额外设置权限或用 PAT
+          git push origin master
