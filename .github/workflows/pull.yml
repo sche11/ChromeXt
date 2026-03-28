@@ -1,39 +1,62 @@
 name: Sync upstream master
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动触发调试
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 00:00
+    - cron: '0 0 * * *' # 每天 UTC 00:00 执行
+
+# 提前适配Node.js 24，解决官方弃用警告，避免2026年6月后任务失效
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # 固定稳定镜像，和你的运行环境完全匹配，避免latest版本波动
+    permissions:
+      contents: write # 显式授予代码写入权限，确保推送正常
     steps:
-      - name: Checkout repository
+      # 1. 检出当前仓库的master分支，使用完整引用彻底避免标签歧义
+      - name: Checkout target repository
         uses: actions/checkout@v4
         with:
           ref: refs/heads/master
-          fetch-depth: 0
+          fetch-depth: 0 # 拉取全量历史，保证合并同步正常
+          token: ${{ secrets.GITHUB_TOKEN }} # 传入token，确保后续git操作有权限
+          persist-credentials: true # 持久化凭证，后续push无需额外配置
 
+      # 2. 自动清理歧义的master标签，从根源避免分支/标签重名问题
+      - name: Clean ambiguous master tag
+        run: |
+          # 删除本地可能存在的master标签，报错不中断流程
+          git tag -d master 2>/dev/null || true
+          # 拉取并清理远程已删除的标签，避免残留
+          git fetch --prune origin +refs/tags/*:refs/tags/*
+
+      # 3. 配置Git用户信息，确保提交记录合规
       - name: Setup git user
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
+      # 4. 添加上游仓库，仅拉取上游master分支，避免拉取多余分支/标签
       - name: Add upstream remote and fetch
         run: |
+          # 先清理已存在的upstream，避免重复运行时报错
+          git remote remove upstream 2>/dev/null || true
+          # 添加上游仓库
           git remote add upstream https://github.com/JingMatrix/ChromeXt.git
-          git fetch upstream
+          # 仅拉取上游master分支，--prune清理过时引用，提升运行效率
+          git fetch upstream master --prune
 
+      # 5. 合并上游master分支更新，使用完整引用避免歧义
       - name: Merge upstream/master
         run: |
-          git checkout master
-          # 这里示例做普通合并；若想用 rebase 或 squash，根据需要改命令
-          git merge --no-edit upstream/master || (echo "merge failed"; exit 1)
+          # 切换到本地master分支，完整引用彻底避免歧义
+          git checkout refs/heads/master
+          # 合并上游更新，保留提交记录，合并失败输出清晰提示并终止
+          git merge --no-edit upstream/master || (echo "❌ 合并失败，请检查本地仓库与上游是否有代码冲突"; exit 1)
 
+      # 6. 推送同步后的代码到自己的仓库，完整引用避免歧义
       - name: Push changes
-        env:
-          # 如果是私有仓库，需要使用 PAT with repo permissions, 存在为 secret: PERSOAL_TOKEN
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 若没有权限用 GITHUB_TOKEN 推送到受保护分支，需要额外设置权限或用 PAT
-          git push origin master
+          # 推送完整分支引用，彻底避免标签/分支重名导致的推送失败
+          git push origin refs/heads/master
